@@ -14,6 +14,7 @@ import httpx
 from llmkit.config import Settings, get_settings
 
 Messages = list[dict[str, str]]
+JsonSchema = dict[str, Any]
 
 
 class LLMError(RuntimeError):
@@ -90,12 +91,22 @@ class BaseLLMClient(ABC):
 
     @abstractmethod
     def stream(
-        self, messages: Messages, *, max_tokens: int, temperature: float
+        self,
+        messages: Messages,
+        *,
+        max_tokens: int,
+        temperature: float,
+        json_schema: JsonSchema | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Yield StreamEvents as the provider streams its response."""
 
     async def generate(
-        self, messages: Messages, *, max_tokens: int = 1024, temperature: float = 0.0
+        self,
+        messages: Messages,
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+        json_schema: JsonSchema | None = None,
     ) -> LLMResult:
         """Consume the stream, collect text, and compute latency/throughput/cost."""
         content_parts: list[str] = []
@@ -106,7 +117,9 @@ class BaseLLMClient(ABC):
         first_content: float | None = None
 
         start = time.perf_counter()
-        async for ev in self.stream(messages, max_tokens=max_tokens, temperature=temperature):
+        async for ev in self.stream(
+            messages, max_tokens=max_tokens, temperature=temperature, json_schema=json_schema
+        ):
             now = time.perf_counter() - start
             if ev.content or ev.reasoning:
                 n_chunks += 1
@@ -158,14 +171,21 @@ class OllamaClient(BaseLLMClient):
     provider = "ollama"
 
     async def stream(
-        self, messages: Messages, *, max_tokens: int = 1024, temperature: float = 0.0
+        self,
+        messages: Messages,
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+        json_schema: JsonSchema | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": True,
             "options": {"num_predict": max_tokens, "temperature": temperature},
         }
+        if json_schema is not None:
+            payload["format"] = json_schema  # Ollama constrains decoding to this schema
         async with self._http.stream("POST", "/api/chat", json=payload) as resp:
             await _check(resp)
             async for line in resp.aiter_lines():
@@ -207,7 +227,12 @@ class OpenAICompatClient(BaseLLMClient):
         self.reasoning_effort = reasoning_effort
 
     async def stream(
-        self, messages: Messages, *, max_tokens: int = 1024, temperature: float = 0.0
+        self,
+        messages: Messages,
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+        json_schema: JsonSchema | None = None,
     ) -> AsyncIterator[StreamEvent]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -219,6 +244,11 @@ class OpenAICompatClient(BaseLLMClient):
         }
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
+        if json_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "extraction", "schema": json_schema},
+            }
 
         async with self._http.stream("POST", "/chat/completions", json=payload) as resp:
             await _check(resp)

@@ -30,12 +30,13 @@ class ExtractionError(ValueError):
 
 
 @dataclass
-class ExtractionResult(Generic[T]):  # noqa: UP046 (kept explicit for py3.11 readability)
+class ExtractionResult(Generic[T]):  # noqa: UP046
     data: T
     raw_text: str
-    used_native_schema: bool  # False if the provider rejected schema enforcement
+    used_native_schema: bool
     latency_s: float
     cost_usd: float
+    provider: str = "unknown"
 
 
 def clean_json_text(text: str) -> str:
@@ -49,26 +50,43 @@ async def extract(
     client: BaseLLMClient, document: str, model_cls: type[T], *, max_tokens: int = 1500
 ) -> ExtractionResult[T]:
     schema = model_cls.model_json_schema()
+
     messages: Messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(schema=json.dumps(schema))},
-        {"role": "user", "content": f"Document:\n\n{document}"},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT.format(schema=json.dumps(schema)),
+        },
+        {
+            "role": "user",
+            "content": f"Document:\n\n{document}",
+        },
     ]
 
     native = True
+
     try:
-        result = await client.generate(messages, max_tokens=max_tokens, json_schema=schema)
+        result = await client.generate(
+            messages,
+            max_tokens=max_tokens,
+            json_schema=schema,
+        )
     except LLMError as e:
-        # Some providers reject parts of a schema (HTTP 400). Fall back to prompt-only
-        # instructions; Pydantic validation below still guards the output.
         if "HTTP 400" not in str(e):
             raise
+
         native = False
-        result = await client.generate(messages, max_tokens=max_tokens)
+        result = await client.generate(
+            messages,
+            max_tokens=max_tokens,
+        )
 
     try:
         data = model_cls.model_validate_json(clean_json_text(result.text))
     except ValidationError as e:
-        raise ExtractionError(f"validation failed: {e}", raw_text=result.text) from e
+        raise ExtractionError(
+            f"validation failed: {e}",
+            raw_text=result.text,
+        ) from e
 
     return ExtractionResult(
         data=data,
@@ -76,4 +94,5 @@ async def extract(
         used_native_schema=native,
         latency_s=result.total_s,
         cost_usd=result.cost_usd,
+        provider=getattr(client, "provider", "unknown"),
     )

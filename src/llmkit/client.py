@@ -127,7 +127,11 @@ class BaseLLMClient(ABC):
             usage = Usage(completion_tokens=n_chunks)  # rough: 1 chunk ~ 1 token
 
         window = total - first_any if first_any is not None else 0.0
-        tps = usage.completion_tokens / window if window > 0 and usage.completion_tokens else None
+        tps = (
+            (usage.completion_tokens - 1) / window
+            if window > 0 and usage.completion_tokens > 1
+            else None
+        )
         cost = (
             usage.prompt_tokens * self.price_in_per_m
             + usage.completion_tokens * self.price_out_per_m

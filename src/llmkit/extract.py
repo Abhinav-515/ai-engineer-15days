@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from llmkit.attempts import AttemptRecord
 from llmkit.client import BaseLLMClient, LLMError, Messages, http_status
 
 T = TypeVar("T", bound=BaseModel)
@@ -37,6 +38,7 @@ class ExtractionResult(Generic[T]):  # noqa: UP046
     latency_s: float
     cost_usd: float
     provider: str = "unknown"
+    attempts: list[AttemptRecord] = field(default_factory=list)
 
 
 def clean_json_text(text: str) -> str:

@@ -1,0 +1,21 @@
+                 NORTHSTAR OFFICE SOLUTIONS
+                         TAX INVOICE
+
+Invoice No : NS-2026-204
+Invoice Date: 14 March 2026
+Payment Due: 13 April 2026
+
+Bill To: Acme Technologies
+
+Description             Qty       Unit Price       Amount
+---------------------------------------------------------
+Mechanical Keyboard      2          45.00            90.00
+USB-C Dock               1          80.00            80.00
+Laptop Stand             2          25.00            50.00
+
+                                      Subtotal: USD 220.00
+                                      Tax:      USD  22.00
+                                      TOTAL:    USD 242.00
+
+Payment Status: UNPAID
+Thank you for your business.

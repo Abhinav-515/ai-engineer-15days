@@ -106,3 +106,35 @@ def test_store_rejects_existing_collection_with_wrong_dimensions(tmp_path):
 
     with pytest.raises(ValueError, match="dimensions"):
         QdrantVectorStore(path, collection_name="dimension_test", vector_size=4)
+
+
+def test_scroll_all_returns_every_chunk_across_batches(tmp_path):
+    texts = [f"chunk {i}" for i in range(5)]
+    vectors = [[1.0, float(i), 0.0] for i in range(5)]
+
+    with make_store(tmp_path) as store:
+        store.upsert(texts, vectors, metadata=[{"chunk_index": i} for i in range(5)])
+        results = store.scroll_all(batch_size=2)
+
+    assert sorted(result.text for result in results) == sorted(texts)
+    assert {result.metadata["chunk_index"] for result in results} == {0, 1, 2, 3, 4}
+    assert all(result.score == 0.0 for result in results)
+
+
+def test_scroll_all_on_empty_collection_returns_empty_list(tmp_path):
+    with make_store(tmp_path) as store:
+        assert store.scroll_all() == []
+
+
+def test_scroll_all_is_deterministic(tmp_path):
+    with make_store(tmp_path) as store:
+        store.upsert(["a text", "b text", "c text"], [[1.0, 0.0, 0.0]] * 3)
+        first = store.scroll_all()
+        second = store.scroll_all()
+
+    assert [r.id for r in first] == [r.id for r in second]
+
+
+def test_scroll_all_rejects_invalid_batch_size(tmp_path):
+    with make_store(tmp_path) as store, pytest.raises(ValueError, match="batch_size"):
+        store.scroll_all(batch_size=0)

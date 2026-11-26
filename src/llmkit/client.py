@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -19,6 +20,36 @@ JsonSchema = dict[str, Any]
 
 class LLMError(RuntimeError):
     """Raised when a provider returns an HTTP error."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_s: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after_s = retry_after_s
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header given in seconds; return None for anything else."""
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return seconds if 0 <= seconds < float("inf") else None
+
+
+def http_status(error: LLMError) -> int | None:
+    """Return the HTTP status of an LLMError, using the message text as a fallback."""
+    if error.status_code is not None:
+        return error.status_code
+    match = re.search(r"HTTP (\d{3})", str(error))
+    return int(match.group(1)) if match else None
 
 
 @dataclass
@@ -56,7 +87,11 @@ async def _check(resp: httpx.Response) -> None:
     """Raise LLMError with the response body (raise_for_status hides it on streams)."""
     if resp.is_error:
         body = (await resp.aread()).decode(errors="replace")[:500]
-        raise LLMError(f"HTTP {resp.status_code} from {resp.request.url}: {body}")
+        raise LLMError(
+            f"HTTP {resp.status_code} from {resp.request.url}: {body}",
+            status_code=resp.status_code,
+            retry_after_s=parse_retry_after(resp.headers.get("retry-after")),
+        )
 
 
 class BaseLLMClient(ABC):

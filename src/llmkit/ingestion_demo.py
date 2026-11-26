@@ -25,8 +25,9 @@ async def run_strategy(
     embedder: OllamaEmbedder,
     db_dir: Path,
     query: str,
+    collection_prefix: str,
 ) -> None:
-    collection = f"day5_{strategy}"
+    collection = f"{collection_prefix}_{strategy}"
 
     print(f"\n{'=' * 68}")
     print(f"CHUNKING STRATEGY: {strategy.upper()}")
@@ -91,6 +92,11 @@ async def main() -> None:
         type=Path,
         default=ROOT / "output" / "day5" / "qdrant",
     )
+    parser.add_argument(
+        "--collection-prefix",
+        default="day5",
+        help="Prefix for Qdrant collection names (default: day5).",
+    )
     args = parser.parse_args()
 
     args.db_dir.mkdir(parents=True, exist_ok=True)
@@ -102,6 +108,7 @@ async def main() -> None:
                 embedder,
                 args.db_dir,
                 args.query,
+                args.collection_prefix,
             )
 
 

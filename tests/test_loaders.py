@@ -154,3 +154,18 @@ def test_truncate_keeps_head_and_tail():
 def test_truncate_rejects_bad_limit():
     with pytest.raises(ValueError):
         truncate_text("x", max_chars=0)
+
+
+async def test_load_text(tmp_path):
+    path = tmp_path / "invoice.txt"
+    path.write_text("Invoice total: USD 242.00")
+    doc = await load_document(path)
+    assert doc.kind == "text"
+    assert "USD 242.00" in doc.text
+
+
+async def test_empty_text_is_rejected(tmp_path):
+    path = tmp_path / "empty.txt"
+    path.write_text("  " + chr(10))
+    with pytest.raises(DocumentError, match="text file is empty"):
+        await load_document(path)

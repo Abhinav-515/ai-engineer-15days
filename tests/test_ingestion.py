@@ -80,6 +80,6 @@ async def test_ingest_file_loads_and_indexes_text(tmp_path):
         result = await ingest_file(path, FakeEmbedder(), store, strategy="recursive")
         results = store.search([1.0, 0.0, 0.0])
 
-    assert result.kind == "log"
+    assert result.kind == "text"
     assert result.chunks_stored > 0
     assert results[0].metadata["source"] == str(path)

@@ -19,6 +19,7 @@ Applied Generative AI, RAG & Agentic Workflows.
 - [x] Day 4: Document loaders, preprocessing, resilient batch pipeline, log parsing and exports
 - [x] Day 5: Vector embeddings, chunking strategies and Qdrant ingestion
 - [x] Day 6: BM25, hybrid retrieval, cross-encoder reranking and retrieval evaluation
+- [x] Day 7: Grounded RAG, structured generation, source citations and refusal validation
 
 ## Day 4: Document Processing Pipeline
 
@@ -135,6 +136,48 @@ The current smoke benchmark uses five manually labelled queries and four stored 
 - All strategies retrieve every labelled relevant chunk within the top three results, so Recall@3 is 1.000 for each strategy.
 
 These results are an initial functional benchmark, not a statistically robust performance claim. The corpus contains only four chunks and five queries, with one relevant chunk per query. Precision@3 and Recall@3 therefore have limited ability to distinguish the strategies. A larger labelled evaluation set is needed to establish general retrieval-quality improvements.
+
+
+## Day 7: Production RAG with Citations
+
+Day 7 connects the Day 6 hybrid retriever to structured LLM generation to produce grounded answers with validated source references.
+
+### Architecture
+
+`question -> HybridRetriever -> context preparation -> structured LLM generation -> citation validation -> grounded response`
+
+- **Hybrid retrieval:** retrieves relevant document chunks using dense and BM25 search with rank fusion.
+- **Context preparation:** formats retrieved chunks with source metadata and stable per-response labels such as `[S1]`, `[S2]` and `[S3]`.
+- **Structured generation:** uses a Pydantic `GeneratedAnswer` schema to require an answer, citation list and abstention flag.
+- **Inline citations:** instructs the model to cite the specific chunk supporting each factual claim, including when facts come from different chunks.
+- **Citation validation:** rejects missing, unknown, duplicated or inconsistent citation labels and malformed structured responses.
+- **Deterministic refusal:** returns a fixed refusal without calling the LLM when retrieval returns no chunks.
+- **Source metadata:** returns the cited document, chunk index, document kind and chunking strategy.
+
+Plain-text `.txt` files are classified as `text`; `.log` files retain the `log` classification.
+
+### Run the Day 7 ingestion demo
+
+Build the Day 7 recursive-chunking collection:
+
+`python -m llmkit.ingestion_demo --strategies recursive --db-dir output/day7/qdrant --collection-prefix day7`
+
+This stores the sample document chunks in the local `day7_recursive` Qdrant collection.
+
+### Run the grounded RAG demo
+
+`python -m llmkit.rag_demo`
+
+The default demo reads from `output/day7/qdrant` and `day7_recursive`. It asks an invoice question and prints the grounded answer, source citations and execution summary.
+
+### Citation validation and limitations
+
+The application validates that inline citation labels refer to retrieved chunks and that the inline labels match the structured citations list. It also rejects malformed responses and invalid abstention/citation combinations.
+
+Citation-label validation does not independently prove semantic entailment: it does not guarantee that every generated claim is factually supported by its cited chunk. The prompt encourages claim-level citations, but semantic verification remains a limitation.
+
+The current demonstration uses a small local sample corpus. Larger document collections and a broader evaluation set are needed for production-quality reliability measurements.
+
 
 ## Tests
 

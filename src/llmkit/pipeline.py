@@ -13,6 +13,7 @@ from llmkit.loaders import DocumentError, load_document
 from llmkit.preprocess import clean_text, truncate_text
 from llmkit.resilience import FallbackError, extract_with_fallback
 from llmkit.schemas import Invoice
+from llmkit.tabular import TableParseError, parse_invoice_table
 
 
 @dataclass
@@ -29,6 +30,8 @@ class DocumentOutcome:
     truncated: bool = False
     error: str | None = None
     error_stage: str | None = None
+    method: str = "llm"
+    note: str | None = None
 
 
 @dataclass
@@ -76,6 +79,21 @@ async def process_document(
             )
 
         kind = raw.kind
+        note: str | None = None
+        if raw.kind == "table" and raw.tables:
+            try:
+                invoice = parse_invoice_table(raw.tables[0])
+            except TableParseError as error:
+                note = f"deterministic table parse failed: {error}"
+            else:
+                return DocumentOutcome(
+                    source=source,
+                    kind=kind,
+                    status="ok",
+                    invoice=invoice,
+                    provider="deterministic",
+                    method="table",
+                )
         text, truncated = truncate_text(clean_text(raw.text), max_chars)
         options = {"jitter_ratio": 0.25, "fallback_max_attempts": 2, **retry_options}
         try:
@@ -87,6 +105,7 @@ async def process_document(
                 status="failed",
                 attempts=error.attempts,
                 truncated=truncated,
+                note=note,
                 error=str(error),
                 error_stage="extract",
             )
@@ -102,6 +121,7 @@ async def process_document(
             cost_usd=result.cost_usd,
             latency_s=result.latency_s,
             truncated=truncated,
+            note=note,
         )
     except Exception as error:
         return DocumentOutcome(

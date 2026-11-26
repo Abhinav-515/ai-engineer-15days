@@ -178,3 +178,34 @@ class QdrantVectorStore:
             )
 
         return results
+
+    def scroll_all(self, *, batch_size: int = 256) -> list[SearchResult]:
+        """Return every stored chunk (score is 0.0), ordered by point id."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
+        results: list[SearchResult] = []
+        offset = None
+
+        while True:
+            points, offset = self._client.scroll(
+                collection_name=self.collection_name,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                results.append(
+                    SearchResult(
+                        id=str(point.id),
+                        text=payload.get("text", ""),
+                        score=0.0,
+                        metadata=payload.get("metadata", {}),
+                    )
+                )
+            if offset is None:
+                break
+
+        return sorted(results, key=lambda result: result.id)

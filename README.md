@@ -18,6 +18,7 @@ Applied Generative AI, RAG & Agentic Workflows.
 - [x] Day 3: Structured extraction, Pydantic validation and provider fallback
 - [x] Day 4: Document loaders, preprocessing, resilient batch pipeline, log parsing and exports
 - [x] Day 5: Vector embeddings, chunking strategies and Qdrant ingestion
+- [x] Day 6: BM25, hybrid retrieval, cross-encoder reranking and retrieval evaluation
 
 ## Day 4: Document Processing Pipeline
 
@@ -84,7 +85,56 @@ Generated vector database files are written under `output/day5/` and excluded fr
 
 ### Current scope and evaluation
 
-This implementation demonstrates ingestion and dense-vector similarity search. It does not yet implement BM25 hybrid retrieval, cross-encoder reranking, or Precision@k and Recall@k evaluation. Those are planned for Day 6; no retrieval-quality improvement is claimed yet.
+Day 5 provides the document ingestion and dense-vector retrieval foundation. Day 6 extends it with lexical retrieval, hybrid ranking, reranking and retrieval-quality evaluation.
+
+## Day 6: Hybrid Search and Evaluation
+
+### Architecture
+
+`query -> dense retrieval + BM25 retrieval -> rank fusion -> optional cross-encoder reranking`
+
+- **BM25:** implements lexical retrieval using term frequency and inverse document frequency, useful for exact terms, identifiers and keyword matching.
+- **Dense retrieval:** uses the Day 5 Ollama embeddings and Qdrant cosine similarity search.
+- **Rank fusion:** combines dense and lexical rankings using Reciprocal Rank Fusion (RRF) or weighted score fusion.
+- **Hybrid retriever:** supports `dense`, `bm25`, `hybrid` and `hybrid+rerank` retrieval modes.
+- **Cross-encoder reranking:** optionally reranks retrieved candidates using `cross-encoder/ms-marco-MiniLM-L-6-v2`.
+- **Index refresh:** rebuilds the lexical index when the underlying vector-store documents change.
+
+### Evaluation
+
+The evaluation module implements:
+
+- Precision@k
+- Recall@k
+- Reciprocal Rank (RR)
+- Mean Reciprocal Rank (MRR)
+
+Run the evaluation against the existing recursive-chunking Qdrant collection:
+
+`python -m llmkit.evaluation_demo`
+
+Include the cross-encoder reranker:
+
+`python -m llmkit.evaluation_demo --rerank`
+
+The current smoke benchmark uses five manually labelled queries and four stored chunks from the Day 4 sample documents.
+
+| Retrieval strategy | Precision@1 | Recall@1 | Precision@3 | Recall@3 | MRR |
+|---|---:|---:|---:|---:|---:|
+| Dense | 0.600 | 0.600 | 0.333 | 1.000 | 0.767 |
+| BM25 | 0.800 | 0.800 | 0.333 | 1.000 | 0.900 |
+| Hybrid RRF | 0.800 | 0.800 | 0.333 | 1.000 | 0.867 |
+| Hybrid + reranker | 0.800 | 0.800 | 0.333 | 1.000 | 0.867 |
+
+### Findings and limitations
+
+- Hybrid RRF improves Precision@1 and Recall@1 from 0.600 to 0.800 compared with dense retrieval.
+- Hybrid RRF improves MRR from 0.767 to 0.867 compared with dense retrieval.
+- BM25 achieves the highest MRR (0.900) on this benchmark.
+- Cross-encoder reranking does not improve MRR over hybrid RRF on this dataset.
+- All strategies retrieve every labelled relevant chunk within the top three results, so Recall@3 is 1.000 for each strategy.
+
+These results are an initial functional benchmark, not a statistically robust performance claim. The corpus contains only four chunks and five queries, with one relevant chunk per query. Precision@3 and Recall@3 therefore have limited ability to distinguish the strategies. A larger labelled evaluation set is needed to establish general retrieval-quality improvements.
 
 ## Tests
 

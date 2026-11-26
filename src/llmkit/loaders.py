@@ -78,12 +78,24 @@ def load_log(path: str | Path) -> RawDocument:
     return RawDocument(source=str(path), kind="log", text=text)
 
 
+def load_text(path: str | Path) -> RawDocument:
+    """Load a plain-text document."""
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        raise DocumentError(f"cannot read text file {path.name}: {error}") from error
+    if not text.strip():
+        raise DocumentError(f"{path.name}: text file is empty")
+    return RawDocument(source=str(path), kind="text", text=text)
+
+
 _LOADERS = {
     ".pdf": load_pdf,
     ".csv": load_table,
     ".tsv": load_table,
     ".log": load_log,
-    ".txt": load_log,
+    ".txt": load_text,
 }
 
 

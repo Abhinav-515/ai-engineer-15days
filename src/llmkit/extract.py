@@ -9,7 +9,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from llmkit.client import BaseLLMClient, LLMError, Messages
+from llmkit.client import BaseLLMClient, LLMError, Messages, http_status
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -71,7 +71,7 @@ async def extract(
             json_schema=schema,
         )
     except LLMError as e:
-        if "HTTP 400" not in str(e):
+        if http_status(e) != 400:
             raise
 
         native = False

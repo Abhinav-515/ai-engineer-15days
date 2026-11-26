@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 import httpx
 from pydantic import BaseModel
 
-from llmkit.client import BaseLLMClient, LLMError
+from llmkit.client import BaseLLMClient, LLMError, http_status
 from llmkit.extract import ExtractionError, ExtractionResult, extract
 
 T = TypeVar("T", bound=BaseModel)
@@ -34,9 +33,8 @@ def _is_retryable(error: Exception) -> bool:
         return True
 
     if isinstance(error, LLMError):
-        match = re.search(r"HTTP (\d{3})", str(error))
-        if match:
-            status = int(match.group(1))
+        status = http_status(error)
+        if status is not None:
             return status == 429 or 500 <= status <= 599
 
     return False

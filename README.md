@@ -22,6 +22,7 @@ Applied Generative AI, RAG & Agentic Workflows.
 - [x] Day 7: Grounded RAG, structured generation, source citations and refusal validation
 - [x] Day 8: Conversational memory, follow-up query rewriting and SSE streaming
 - [x] Day 9: Validated tool schemas, bounded tool-calling loop and guarded execution
+- [x] Day 10: Hybrid compute and retrieval agent, deterministic SQL tools and query routing
 
 ## Day 4: Document Processing Pipeline
 
@@ -299,6 +300,60 @@ These are observations from one run with the local 3B model, not reliability mea
 - The tool boundary is designed for a small allowlist of trusted handlers, not arbitrary untrusted code execution.
 - The local model may produce malformed or redundant actions; retries and repeated-call detection limit, but do not eliminate, those behaviors.
 - A successful demo run is not a substitute for broader agent evaluation. Task success, tool selection, argument validity and final-answer completeness need a larger test set in later evaluation work.
+
+## Day 10: Hybrid Compute and Retrieval Agent
+
+Day 10 combines deterministic structured-data computation with document retrieval. A query router selects the compute path, retrieval path, or both.
+
+### Architecture
+
+`question -> QueryRouter -> compute | retrieve | both -> HybridAgent -> response`
+
+| Module | Responsibility |
+| --- | --- |
+| `router.py` | Uses structured LLM output to classify a question as `compute`, `retrieve`, or `both`. Invalid output or LLM failures fall back to retrieval. |
+| `sql_tool.py` | Loads the Day 10 invoice CSV into SQLite and exposes fixed, parameterized invoice queries through the existing tool interface. |
+| `hybrid_agent.py` | Dispatches to the selected path. The `both` route runs computation and retrieval concurrently and preserves document citations. |
+| `hybrid_demo.py` | Connects the router, SQL tool, and Day 7 RAG components for a live demonstration. |
+
+The SQL interface supports invoice details, status summaries, and vendor summaries. Monetary values are stored as integer cents, and totals are grouped by currency to avoid combining unlike currencies. The model does not generate or execute arbitrary SQL.
+
+The demo dataset in `samples/day10/invoices.csv` is synthetic and is separate from the Day 4 document samples.
+
+### Run the Day 10 demo
+
+Requires Ollama (`llama3.2:3b`, `nomic-embed-text`) and the Day 7 Qdrant collection:
+
+`python -m llmkit.hybrid_demo`
+
+Ask a custom question:
+
+`python -m llmkit.hybrid_demo --query "What is the total amount of unpaid invoices in the structured dataset?"`
+
+The default retrieval mode is hybrid search. To enable the optional cross-encoder reranker, install the extra:
+
+`pip install -e ".[rerank]"`
+
+Then run:
+
+`python -m llmkit.hybrid_demo --mode hybrid --rerank --top-k 5`
+
+The `--rerank` option is valid only with `--mode hybrid`. It uses the optional `sentence-transformers` dependency and loads the cross-encoder lazily.
+
+### Observed live results
+
+- A structured unpaid-invoice query selected `compute` and returned **USD 85.80 across two unpaid invoices** from the synthetic SQL dataset.
+- A payment-gateway incident question selected `retrieve`. With hybrid retrieval and cross-encoder reranking, the observed answer identified the timeout and retry completion at 09:17:45, citing the application log.
+- In a separate retrieval-ranking check, the cross-encoder ranked both chunks for invoice `NS-2026-204` ahead of unrelated chunks for a query asking about its line items and totals.
+
+These are individual observations using the local 3B model, not reliability measurements. Cross-encoder scores are ranking scores, not probabilities.
+
+### Known limitations
+
+- Routing still depends on a small local model and a limited set of deterministic operational-event cues. The fallback to retrieval is intentional when structured routing fails.
+- RAG citation validation checks source labels, not whether each claim is semantically supported by the cited passage. Retrieved chunks can contain facts about different invoices, so a valid citation does not guarantee correct entity attribution.
+- Prompt instructions to focus on document-relevant facts do not guarantee that the model will exclude unrelated facts from retrieved context.
+- The dataset and document collection are small demonstrations, not production financial data. Broader routing, calculation, retrieval, and faithfulness evaluation remains necessary.
 
 ## Tests
 

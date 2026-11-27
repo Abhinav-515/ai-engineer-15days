@@ -20,6 +20,7 @@ Applied Generative AI, RAG & Agentic Workflows.
 - [x] Day 5: Vector embeddings, chunking strategies and Qdrant ingestion
 - [x] Day 6: BM25, hybrid retrieval, cross-encoder reranking and retrieval evaluation
 - [x] Day 7: Grounded RAG, structured generation, source citations and refusal validation
+- [x] Day 8: Conversational memory, follow-up query rewriting and SSE streaming
 
 ## Day 4: Document Processing Pipeline
 
@@ -178,6 +179,66 @@ Citation-label validation does not independently prove semantic entailment: it d
 
 The current demonstration uses a small local sample corpus. Larger document collections and a broader evaluation set are needed for production-quality reliability measurements.
 
+
+## Day 8: Conversational RAG and Streaming
+
+Day 8 adds multi-turn memory, follow-up query rewriting and Server-Sent Events (SSE) streaming on top of the Day 7 grounded RAG service. Day 7 behavior (citation validation, deterministic refusal) is unchanged.
+
+### Architecture
+
+`question -> ConversationMemory -> QueryRewriter -> HybridRetriever -> context preparation -> streaming structured generation -> citation/refusal validation -> SSE frames`
+
+| Module | Responsibility |
+| --- | --- |
+| `memory.py` | `ConversationMemory`: sliding window of the last `max_turns` question/answer turns, one instance per session, no global state. |
+| `rewriter.py` | `QueryRewriter`: turns a follow-up into a standalone question using history. Skips the LLM call when history is empty and falls back to the original question on LLM errors or invalid, empty or overlong output (`fallback_reason` records why). Never calls the retriever. |
+| `json_stream.py` | `AnswerFieldExtractor`: incrementally decodes the `answer` string from streamed JSON, including escapes and surrogate pairs split across chunks. |
+| `rag.py` | `RAGService.stream_ask()` streams answer tokens, then runs the same `_build_response()` validation as `ask()`. |
+| `conversation.py` | `ConversationalRAG`: composes rewriter, `RAGService` and memory per session. Retrieval and generation receive the rewritten standalone question. |
+| `sse.py` | Framework-agnostic SSE formatting and headers. No web framework is required; a FastAPI `StreamingResponse` can wrap it in Day 13. |
+
+Design decisions:
+
+- Memory stores the standalone question, not the raw follow-up, so entities such as invoice numbers stay in the window.
+- Stored answers have `[S#]` markers removed, because labels are only valid within one answer.
+- Memory is updated only after a successful answer. Abstentions are stored; errors are not.
+- A per-session `asyncio.Lock` serializes turns so history cannot interleave.
+- Rewriting is separate from retrieval: the rewriter only returns a query string.
+
+### SSE event contract
+
+Responses use `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache`, `Connection: keep-alive` and `X-Accel-Buffering: no`. Each frame is `event: <name>` followed by single-line JSON `data:`.
+
+| Event | Payload |
+| --- | --- |
+| `rewrite` | `{"query": "<standalone question used for retrieval>"}` |
+| `token` | `{"text": "<provisional answer text>"}` |
+| `final` | Validated answer, citations, `abstained`, `retrieved_count`, `provider`, `latency_s`, `cost_usd` |
+| `error` | `{"message": "<reason>"}` |
+| `done` | `{}` (always the last frame) |
+
+Unexpected exceptions become a generic `error` frame that contains only the exception type. If the consumer stops reading, the upstream LLM stream is closed.
+
+### Run the Day 8 demo
+
+Requires Ollama (`llama3.2:3b`, `nomic-embed-text`) and the Day 7 collection:
+
+`python -m llmkit.conversation_demo`
+
+Options: `--raw` prints literal SSE frames, `--question` (repeatable) sets custom turns, `--max-turns` sets the memory window. The default conversation asks about invoice `NS-2026-204`, follows up with "What is its total amount?" (rewritten to a standalone question) and then asks an independent question (not rewritten).
+
+### Streaming trade-off
+
+Citations can only be validated once the full JSON object exists. `token` events are therefore provisional: the `final` event is the authoritative result. If an `error` event arrives, clients must discard the streamed text.
+
+### Known limitations
+
+- Citation validation still checks labels, not semantic support. Observed example (before the prompt-example change; see the next item): asked for the vendor of `NS-2026-204`, the 3B model answered "Northstar Supplies" and cited `[S2]`, a chunk that says "NORTHSTAR OFFICE SOLUTIONS". "Northstar Supplies" appears only in a different invoice in `invoices.csv`, which was in the same context. The validation accepted the answer because `[S2]` was a valid label. Claim-level faithfulness measurement is planned for Day 11.
+- After the prompt examples were made neutral, the same vendor question again returned "Northstar Supplies", this time citing `[S1]` from `invoices.csv`. That chunk contains the name, but for a different invoice (`INV-2026-101`), so the citation matches the text while the entity is wrong. The prompt-example change did not fix this; retrieved context that mixes two invoices is the more likely cause. In the same run, the follow-up "Who issued it?" was rewritten to a standalone query and correctly answered "NORTHSTAR OFFICE SOLUTIONS", so memory held two contradictory vendor answers. Both observations are single runs on a 3B model, not measured rates.
+- Memory stores whatever answer was validated, so an unsupported answer can persist into later turns.
+- The query rewriter uses the same small local model as generation and is only tested on a small number of follow-ups.
+- Memory is in-process only; there is no HTTP endpoint or persistence yet (Day 13).
+- Evaluated on a four-chunk sample corpus and unit tests with fake clients. This is not a production-readiness claim.
 
 ## Tests
 

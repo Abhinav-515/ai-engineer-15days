@@ -21,6 +21,7 @@ Applied Generative AI, RAG & Agentic Workflows.
 - [x] Day 6: BM25, hybrid retrieval, cross-encoder reranking and retrieval evaluation
 - [x] Day 7: Grounded RAG, structured generation, source citations and refusal validation
 - [x] Day 8: Conversational memory, follow-up query rewriting and SSE streaming
+- [x] Day 9: Validated tool schemas, bounded tool-calling loop and guarded execution
 
 ## Day 4: Document Processing Pipeline
 
@@ -239,6 +240,65 @@ Citations can only be validated once the full JSON object exists. `token` events
 - The query rewriter uses the same small local model as generation and is only tested on a small number of follow-ups.
 - Memory is in-process only; there is no HTTP endpoint or persistence yet (Day 13).
 - Evaluated on a four-chunk sample corpus and unit tests with fake clients. This is not a production-readiness claim.
+
+## Day 9: Tool-Calling Agent
+
+Day 9 introduces a provider-independent agent loop that selects from registered Python tools, validates their arguments, executes them through a guarded boundary and uses the observations to produce a final answer.
+
+### Architecture
+
+`task -> ToolAgent -> structured action -> ToolRegistry validation -> guarded execution -> tool observation -> next action or final answer`
+
+| Module | Responsibility |
+| --- | --- |
+| `tools.py` | Defines the `Tool` contract and `ToolRegistry`. Tool names are constrained, duplicate registrations are rejected, and Pydantic argument models reject unexpected fields. |
+| `agent.py` | Implements the bounded asynchronous agent loop, structured action parsing, format-error retries, repeated-call detection, observation history and execution trace. |
+| `sandbox.py` | Wraps tool execution with timeouts, output truncation and normalized error outcomes. Tool failures are returned as observations instead of escaping the agent loop. |
+| `builtin_tools.py` | Provides a restricted AST-based calculator and a file-reading tool confined to a configured root directory. |
+| `agent_demo.py` | Runs the live Ollama demonstration and prints the agent trace. `--debug-raw` also displays raw model responses for troubleshooting. |
+
+### Design and safety decisions
+
+- The action format uses the existing LLM client's JSON-schema generation interface rather than provider-specific native tool calling.
+- Tool arguments are validated before a handler is invoked. Unknown tools and invalid arguments become controlled execution outcomes.
+- The agent has a maximum step budget and a bounded format-error retry budget.
+- An identical tool call is not executed again. The previous observation is supplied to the model so it can continue using the result.
+- Tool output is treated as untrusted data; instructions inside tool results must not override the agent's rules.
+- The calculator evaluates a restricted arithmetic AST. It does not use Python `eval`.
+- The file reader resolves paths under its configured root and rejects traversal and symlink escapes.
+- File access errors are surfaced without returning file contents. The demo's attempt to read `../../.env` is rejected.
+
+The execution guard is an **in-process application-level boundary**, not an operating-system security sandbox. It does not isolate arbitrary Python code or guarantee interruption of CPU-bound handlers. Only trusted, deliberately registered handlers should be exposed.
+
+### Run the Day 9 demo
+
+Requires Ollama and the configured local chat model:
+
+`python -m llmkit.agent_demo`
+
+Print raw model responses alongside the execution trace:
+
+`python -m llmkit.agent_demo --debug-raw`
+
+The demo uses the calculator and a file reader restricted to `samples/day4/`. Its four default tasks cover arithmetic, invoice-number extraction, checking subtotal plus tax against the total, and refusing a path traversal attempt targeting `.env`.
+
+### Observed live demo results
+
+In the latest observed run:
+
+- `(1234 * 5) + 678` returned `6848`.
+- Invoice extraction returned `NS-2026-204`.
+- The invoice arithmetic check reported `220.00 + 22.00 = 242.00`.
+- The repeated calculator call was skipped, and the agent used the previous observation.
+- Reading `../../.env` was rejected; no file contents were exposed.
+
+These are observations from one run with the local 3B model, not reliability measurements. Unit tests use controlled fake clients; live model behavior can vary.
+
+### Known limitations
+
+- The tool boundary is designed for a small allowlist of trusted handlers, not arbitrary untrusted code execution.
+- The local model may produce malformed or redundant actions; retries and repeated-call detection limit, but do not eliminate, those behaviors.
+- A successful demo run is not a substitute for broader agent evaluation. Task success, tool selection, argument validity and final-answer completeness need a larger test set in later evaluation work.
 
 ## Tests
 

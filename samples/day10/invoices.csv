@@ -1,0 +1,8 @@
+invoice_number,vendor_name,invoice_date,due_date,currency,status,tax,description,quantity,unit_price,amount
+INV-2026-201,Apex Office,2026-03-01,2026-03-31,USD,paid,12.00,Office chairs,2,50.00,100.00
+INV-2026-201,Apex Office,2026-03-01,2026-03-31,USD,paid,12.00,Desk lamps,1,20.00,20.00
+INV-2026-202,Northstar Supplies,2026-03-05,2026-04-04,USD,unpaid,4.80,USB-C hubs,2,15.00,30.00
+INV-2026-202,Northstar Supplies,2026-03-05,2026-04-04,USD,unpaid,4.80,Wireless mouse,1,18.00,18.00
+INV-2026-203,Bluebird Logistics,2026-02-01,2026-03-03,USD,overdue,20.00,Freight service,1,200.00,200.00
+INV-2026-204,Northstar Supplies,2026-03-10,2026-04-09,USD,paid,7.50,Network adapters,5,15.00,75.00
+INV-2026-205,Apex Office,2026-03-15,2026-04-14,USD,unpaid,3.00,Printer paper,3,10.00,30.00

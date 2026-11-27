@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from llmkit.client import BaseLLMClient, Messages
+from llmkit.client import BaseLLMClient, LLMError, Messages, Usage
 from llmkit.hybrid import HybridRetriever, RetrievalMode
+from llmkit.json_stream import AnswerFieldExtractor
 from llmkit.vector_store import SearchResult
 
 REFUSAL_MESSAGE = (
@@ -60,6 +65,22 @@ class RAGResponse:
     cost_usd: float = 0.0
 
 
+@dataclass(frozen=True)
+class RAGStreamEvent:
+    """One event of a streamed RAG answer.
+
+    ``rewrite`` events (emitted by the conversation layer) carry the standalone query
+    used for retrieval. ``token`` events carry provisional answer text. The ``final``
+    event carries the validated response and is the authoritative result. An ``error`` event means
+    generation or validation failed, and any streamed tokens must be discarded.
+    """
+
+    type: Literal["rewrite", "token", "final", "error"]
+    text: str = ""
+    response: RAGResponse | None = None
+    error: str | None = None
+
+
 SYSTEM_PROMPT = """You are a careful retrieval-grounded assistant.
 
 Answer the user's question using ONLY the supplied context.
@@ -78,8 +99,8 @@ CITATION RULES:
   facts from multiple chunks.
 - Before answering, identify which retrieved chunk supports each
   requested fact. Cite that chunk directly beside the fact.
-- Example format: "The vendor is Acme Supplies and the line-item
-  amount is USD 90.00 [S1]. The invoice total is USD 110.00 and its
+- Example format: "The vendor is Example Vendor and the line-item
+  amount is USD 12.00 [S1]. The invoice total is USD 15.00 and its
   payment status is unpaid [S2]."
 - The example is a formatting illustration only. Use actual retrieved
   facts and labels, never copy example facts or labels.
@@ -92,7 +113,7 @@ CITATION RULES:
 
 REQUIRED CITATION FORMAT EXAMPLE:
 {{
-  "answer": "The invoice is marked unpaid [S1]. The listed total is USD 242.00 [S2].",
+  "answer": "The order is marked pending [S1]. The listed quantity is 7 units [S2].",
   "citations": ["[S1]", "[S2]"],
   "abstain": false
 }}
@@ -248,7 +269,27 @@ class RAGService:
             )
 
         schema = GeneratedAnswer.model_json_schema()
-        messages: Messages = [
+        messages = self._build_messages(question, context, schema)
+
+        result = await self._client.generate(
+            messages,
+            max_tokens=self.max_tokens,
+            temperature=0.0,
+            json_schema=schema,
+        )
+
+        return self._build_response(
+            result.text,
+            retrieved_count=len(results),
+            citations=citations,
+            latency_s=result.total_s,
+            cost_usd=result.cost_usd,
+        )
+
+    @staticmethod
+    def _build_messages(question: str, context: str, schema: dict) -> Messages:
+        """Build the system and user messages for grounded generation."""
+        return [
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT.format(schema=json.dumps(schema)),
@@ -259,15 +300,18 @@ class RAGService:
             },
         ]
 
-        result = await self._client.generate(
-            messages,
-            max_tokens=self.max_tokens,
-            temperature=0.0,
-            json_schema=schema,
-        )
-
+    def _build_response(
+        self,
+        raw_text: str,
+        *,
+        retrieved_count: int,
+        citations: list[Citation],
+        latency_s: float,
+        cost_usd: float,
+    ) -> RAGResponse:
+        """Parse model output, validate citations and build the final response."""
         try:
-            generated = GeneratedAnswer.model_validate_json(result.text)
+            generated = GeneratedAnswer.model_validate_json(raw_text)
         except ValidationError as exc:
             raise RAGError(f"invalid structured RAG response: {exc}") from exc
 
@@ -275,16 +319,17 @@ class RAGService:
             generated,
             {citation.label for citation in citations},
         )
+        provider = getattr(self._client, "provider", "unknown")
 
         if generated.abstain:
             return RAGResponse(
                 answer=generated.answer.strip() or REFUSAL_MESSAGE,
                 citations=[],
                 abstained=True,
-                retrieved_count=len(results),
-                provider=getattr(self._client, "provider", "unknown"),
-                latency_s=result.total_s,
-                cost_usd=result.cost_usd,
+                retrieved_count=retrieved_count,
+                provider=provider,
+                latency_s=latency_s,
+                cost_usd=cost_usd,
             )
 
         citation_by_label = {citation.label: citation for citation in citations}
@@ -294,8 +339,82 @@ class RAGService:
             answer=generated.answer.strip(),
             citations=selected_citations,
             abstained=False,
-            retrieved_count=len(results),
-            provider=getattr(self._client, "provider", "unknown"),
-            latency_s=result.total_s,
-            cost_usd=result.cost_usd,
+            retrieved_count=retrieved_count,
+            provider=provider,
+            latency_s=latency_s,
+            cost_usd=cost_usd,
         )
+
+    def _estimate_cost(self, usage: Usage | None) -> float:
+        """Estimate cost from provider usage; zero when usage or prices are unknown."""
+        if usage is None:
+            return 0.0
+        price_in = getattr(self._client, "price_in_per_m", 0.0)
+        price_out = getattr(self._client, "price_out_per_m", 0.0)
+        return (usage.prompt_tokens * price_in + usage.completion_tokens * price_out) / 1_000_000
+
+    async def stream_ask(self, question: str) -> AsyncIterator[RAGStreamEvent]:
+        """Stream a grounded answer; the final event holds the validated response."""
+        if not question.strip():
+            raise ValueError("question must not be empty")
+
+        results = await self._retriever.search(
+            question,
+            mode=self.retrieval_mode,
+            limit=self.top_k,
+        )
+
+        context, citations = (
+            self._prepare_context(results, self.max_context_chars) if results else ("", [])
+        )
+        if not citations:
+            yield RAGStreamEvent(
+                "final",
+                response=RAGResponse(
+                    answer=REFUSAL_MESSAGE,
+                    citations=[],
+                    abstained=True,
+                    retrieved_count=len(results),
+                ),
+            )
+            return
+
+        schema = GeneratedAnswer.model_json_schema()
+        messages = self._build_messages(question, context, schema)
+        extractor = AnswerFieldExtractor()
+        raw_parts: list[str] = []
+        usage: Usage | None = None
+        start = time.perf_counter()
+
+        try:
+            async for event in self._client.stream(
+                messages,
+                max_tokens=self.max_tokens,
+                temperature=0.0,
+                json_schema=schema,
+            ):
+                if event.usage is not None:
+                    usage = event.usage
+                if not event.content:
+                    continue
+                raw_parts.append(event.content)
+                piece = extractor.feed(event.content)
+                if piece:
+                    yield RAGStreamEvent("token", text=piece)
+        except (LLMError, httpx.HTTPError) as exc:
+            yield RAGStreamEvent("error", error=f"generation failed: {type(exc).__name__}")
+            return
+
+        try:
+            response = self._build_response(
+                "".join(raw_parts),
+                retrieved_count=len(results),
+                citations=citations,
+                latency_s=time.perf_counter() - start,
+                cost_usd=self._estimate_cost(usage),
+            )
+        except RAGError as exc:
+            yield RAGStreamEvent("error", error=str(exc))
+            return
+
+        yield RAGStreamEvent("final", response=response)

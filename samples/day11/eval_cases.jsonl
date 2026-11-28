@@ -1,0 +1,8 @@
+{"id": "csv-items", "question": "What products and quantities are listed on invoice INV-2026-101?", "answerable": true, "category": "factual", "evidence": ["USB-C Hub", "Wireless Mouse"]}
+{"id": "txt-total-tax", "question": "What is the total amount and tax for invoice NS-2026-204?", "answerable": true, "category": "factual", "evidence": ["TOTAL: USD 242.00", "Tax: USD 22.00"]}
+{"id": "txt-due-date", "question": "When is invoice NS-2026-204 payment due?", "answerable": true, "category": "factual", "evidence": ["Payment Due: 13 April 2026"]}
+{"id": "log-gateway", "question": "What happened with the payment gateway?", "answerable": true, "category": "factual", "evidence": ["payment gateway timeout", "retry scheduled after 30 seconds"]}
+{"id": "log-db-slow", "question": "Why was the database connection slow?", "answerable": true, "category": "factual", "evidence": ["database connection is slow"]}
+{"id": "txt-total-and-due", "question": "What is the total on invoice NS-2026-204 and when is it due?", "answerable": true, "category": "multi_chunk", "evidence": ["TOTAL: USD 242.00", "Payment Due: 13 April 2026"]}
+{"id": "oos-ceo", "question": "Who is the CEO of Northstar Office Solutions?", "answerable": false, "category": "out_of_scope", "evidence": []}
+{"id": "adv-missing-invoice", "question": "What is the payment status of invoice NS-2026-999?", "answerable": false, "category": "adversarial", "evidence": []}

@@ -7,3 +7,11 @@ __pycache__/
 *.egg-info/
 .DS_Store
 benchmarks/results/
+
+output/day4/
+
+output/day5/
+
+output/day7/
+
+output/day11/

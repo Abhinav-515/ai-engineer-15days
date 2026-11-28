@@ -355,6 +355,134 @@ These are individual observations using the local 3B model, not reliability meas
 - Prompt instructions to focus on document-relevant facts do not guarantee that the model will exclude unrelated facts from retrieved context.
 - The dataset and document collection are small demonstrations, not production financial data. Broader routing, calculation, retrieval, and faithfulness evaluation remains necessary.
 
+
+## Day 11: RAG Evaluation Harness
+
+Day 11 introduces an evaluation harness for measuring retrieval quality and generated-answer quality across a small, labelled RAG evaluation dataset.
+
+### Architecture
+
+`evaluation dataset -> RAGService -> retrieved context -> generated answer -> metrics and judge -> JSON report`
+
+| Module | Responsibility |
+| --- | --- |
+| `eval_cases.py` | Defines and validates evaluation cases loaded from JSONL. |
+| `eval_context.py` | Calculates deterministic Context Recall and Context Precision using evidence snippets. |
+| `eval_judge.py` | Uses an LLM judge to evaluate Faithfulness and Answer Relevance. |
+| `eval_harness.py` | Evaluates cases, records errors, aggregates metrics, and writes JSON reports. |
+| `eval_harness_demo.py` | Connects the evaluation dataset, Day 7 Qdrant collection, retriever, generator, and optional judge. |
+
+### Evaluation metrics
+
+- **Context Recall:** Fraction of distinct expected evidence snippets found in at least one retrieved chunk.
+- **Context Precision:** Fraction of retrieved chunks containing at least one expected evidence snippet. It is `n/a` when no chunks are retrieved.
+- **Faithfulness:** Fraction of answer sentences judged as supported by the context supplied to the generator.
+- **Answer Relevance:** LLM-judged rating of how directly the answer addresses the question. `full`, `partial`, and `none` map to `1.0`, `0.5`, and `0.0`.
+- **False Refusal Rate:** Fraction of answerable cases for which the RAG response has `abstained=true`.
+- **Correct Refusal Rate:** Fraction of unanswerable cases for which the RAG response has `abstained=true`.
+
+Before generation, RAG also performs a deterministic identifier preflight. If a question contains a record-like identifier, every requested identifier must appear as a complete identifier token in the retrieved context. A missing or mismatched identifier causes an immediate refusal without calling the generator. This reduces the risk of transferring facts from a different record when the requested identifier is absent from the retrieved context. It does not prove that a generated fact belongs to the requested record when multiple records are present; it is a targeted safeguard, not a general guarantee of semantic correctness.
+
+The harness also reports mean generation latency, generation cost, judge cost, generation errors, and per-case results.
+
+Metric summaries include the number of scored cases and excluded cases. Missing scores and judge failures are not converted into zero scores.
+
+### Dataset format
+
+The evaluation dataset is `samples/day11/eval_cases.jsonl`.
+
+Each non-empty line contains one independent JSON object:
+
+```json
+{
+  "id": "txt-total-tax",
+  "question": "What is the total amount and tax for invoice NS-2026-204?",
+  "answerable": true,
+  "category": "factual",
+  "evidence": [
+    "TOTAL: USD 242.00",
+    "Tax: USD 22.00"
+  ]
+}
+```
+
+Supported categories are `factual`, `multi_chunk`, `adversarial`, and `out_of_scope`.
+
+Answerable cases require at least one non-empty evidence snippet. Unanswerable cases must have an empty evidence list. Case IDs must be unique.
+
+Evidence snippets are matched against individual indexed chunks after whitespace normalization and case folding.
+
+### Run the Day 11 evaluation
+
+Requires the Day 7 Qdrant collection, Ollama, and the configured local models:
+
+`python -m llmkit.eval_harness_demo`
+
+The default configuration uses:
+- Dataset: `samples/day11/eval_cases.jsonl`
+- Collection: `day7_recursive`
+- Retrieval mode: `hybrid`
+- Top-k: `5`
+- Generator: configured Ollama model
+- Judge: configured Ollama model
+
+Run without an LLM judge to calculate deterministic metrics only:
+
+`python -m llmkit.eval_harness_demo --no-judge`
+
+Choose a retrieval mode:
+
+`python -m llmkit.eval_harness_demo --mode dense`
+
+`python -m llmkit.eval_harness_demo --mode bm25`
+
+`python -m llmkit.eval_harness_demo --mode hybrid`
+
+Use a different top-k value:
+
+`python -m llmkit.eval_harness_demo --mode hybrid --top-k 5`
+
+Configure the judge:
+
+`python -m llmkit.eval_harness_demo --judge-provider ollama --judge-model llama3.2:3b`
+
+A cloud judge can also be selected with `--judge-provider cloud`, provided the corresponding API credentials and configuration are available.
+
+The default judge uses the same configured local model as the generator. The demo prints a warning in this situation because a model grading its own answers may produce overly generous scores.
+
+### Evidence preflight
+
+Before evaluation, the demo checks whether each answerable case's evidence snippets occur in at least one indexed chunk.
+
+If evidence is missing, evaluation stops by default to avoid silently reporting misleading recall scores.
+
+Use `--allow-missing-evidence` to continue deliberately:
+
+`python -m llmkit.eval_harness_demo --allow-missing-evidence`
+
+### Reports
+
+The demo prints progress for individual cases and an aggregated evaluation report.
+
+The default per-case JSON report is written to:
+
+`output/day11/report.json`
+
+Use `--output` to choose another report path.
+
+Generation errors are recorded separately and excluded from metrics that cannot be calculated. Judge failures produce unavailable scores rather than artificial zero scores.
+
+### Known limitations
+
+- Context Recall and Context Precision use exact normalized substring matching, not semantic relevance judgments.
+- A retrieved chunk containing one evidence snippet is counted as relevant even if it contains unrelated information.
+- Faithfulness and Answer Relevance depend on an LLM judge and can vary between runs.
+- Faithfulness uses a simple sentence splitter that may incorrectly split abbreviations.
+- The default judge and generator may be the same model, creating self-evaluation bias.
+- Refusal rates use the structured `abstained` flag. They do not detect natural-language or soft refusals when the model returns `abstained=false`.
+- A judge failure excludes the affected score; it does not establish that the generated answer is correct or incorrect.
+- The dataset is small and synthetic. A single run is an observation, not a statistically reliable measurement of production performance.
+
 ## Tests
 
 - Run tests: `pytest -q`

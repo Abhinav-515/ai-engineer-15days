@@ -6,7 +6,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import httpx
@@ -22,6 +22,19 @@ REFUSAL_MESSAGE = (
 )
 
 CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
+RECORD_IDENTIFIER_PATTERN = re.compile(
+    r"\b(?=[A-Z0-9-]*\d)[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b",
+    re.IGNORECASE,
+)
+
+
+def _has_requested_identifiers(question: str, context: str) -> bool:
+    """Return whether every record-like identifier in the question is present."""
+    identifiers = RECORD_IDENTIFIER_PATTERN.findall(question)
+    context_identifiers = {
+        identifier.casefold() for identifier in RECORD_IDENTIFIER_PATTERN.findall(context)
+    }
+    return all(identifier.casefold() in context_identifiers for identifier in identifiers)
 
 
 class RAGError(ValueError):
@@ -63,6 +76,10 @@ class RAGResponse:
     provider: str = "unknown"
     latency_s: float = 0.0
     cost_usd: float = 0.0
+    # Evaluation-only data: the exact context sent to the model and every retrieved chunk.
+    # Excluded from repr, equality and the SSE payload.
+    context: str = field(default="", repr=False, compare=False)
+    retrieved: tuple[SearchResult, ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -85,6 +102,23 @@ SYSTEM_PROMPT = """You are a careful retrieval-grounded assistant.
 
 Answer the user's question using ONLY the supplied context.
 Do not use outside knowledge or invent facts.
+
+ENTITY AND IDENTIFIER MATCHING:
+- Treat identifiers such as invoice numbers, order IDs, customer IDs,
+  account numbers, and ticket IDs as exact values.
+- Before answering a question about a specific identifier, verify that
+  the exact identifier appears in the supplied context and that the
+  requested fact is explicitly associated with that same identifier.
+- Similar, related, or partially matching identifiers are NOT a match.
+  Never transfer a status, amount, date, or other attribute from one
+  record to another record with a different identifier.
+- The presence of an entity's name does not establish every attribute
+  about that entity. Do not infer missing facts such as a person's role,
+  company leadership, address, or contact details.
+- If the exact requested record or attribute is not established by the
+  supplied context, set abstain to true, return an empty citations list,
+  and explain that the documents do not contain the requested information.
+- Do not guess, extrapolate, or use a plausible value to fill missing data.
 
 CITATION RULES:
 - Every factual claim must include an inline citation such as [S1].
@@ -266,6 +300,17 @@ class RAGService:
                 citations=[],
                 abstained=True,
                 retrieved_count=len(results),
+                retrieved=tuple(results),
+            )
+
+        if not _has_requested_identifiers(question, context):
+            return RAGResponse(
+                answer=REFUSAL_MESSAGE,
+                citations=[],
+                abstained=True,
+                retrieved_count=len(results),
+                context=context,
+                retrieved=tuple(results),
             )
 
         schema = GeneratedAnswer.model_json_schema()
@@ -284,6 +329,8 @@ class RAGService:
             citations=citations,
             latency_s=result.total_s,
             cost_usd=result.cost_usd,
+            context=context,
+            retrieved=tuple(results),
         )
 
     @staticmethod
@@ -308,6 +355,8 @@ class RAGService:
         citations: list[Citation],
         latency_s: float,
         cost_usd: float,
+        context: str = "",
+        retrieved: tuple[SearchResult, ...] = (),
     ) -> RAGResponse:
         """Parse model output, validate citations and build the final response."""
         try:
@@ -330,6 +379,8 @@ class RAGService:
                 provider=provider,
                 latency_s=latency_s,
                 cost_usd=cost_usd,
+                context=context,
+                retrieved=retrieved,
             )
 
         citation_by_label = {citation.label: citation for citation in citations}
@@ -343,6 +394,8 @@ class RAGService:
             provider=provider,
             latency_s=latency_s,
             cost_usd=cost_usd,
+            context=context,
+            retrieved=retrieved,
         )
 
     def _estimate_cost(self, usage: Usage | None) -> float:
@@ -375,6 +428,21 @@ class RAGService:
                     citations=[],
                     abstained=True,
                     retrieved_count=len(results),
+                    retrieved=tuple(results),
+                ),
+            )
+            return
+
+        if not _has_requested_identifiers(question, context):
+            yield RAGStreamEvent(
+                "final",
+                response=RAGResponse(
+                    answer=REFUSAL_MESSAGE,
+                    citations=[],
+                    abstained=True,
+                    retrieved_count=len(results),
+                    context=context,
+                    retrieved=tuple(results),
                 ),
             )
             return
@@ -412,6 +480,8 @@ class RAGService:
                 citations=citations,
                 latency_s=time.perf_counter() - start,
                 cost_usd=self._estimate_cost(usage),
+                context=context,
+                retrieved=tuple(results),
             )
         except RAGError as exc:
             yield RAGStreamEvent("error", error=str(exc))

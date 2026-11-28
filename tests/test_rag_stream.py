@@ -218,3 +218,31 @@ async def test_empty_question_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="question"):
         await collect(service, "   ")
+
+
+async def test_missing_invoice_identifier_abstains_without_streaming():
+    result = SearchResult(
+        id="invoice-1",
+        text="Invoice No: NS-2026-204\nPayment Status: UNPAID",
+        score=0.9,
+        metadata={
+            "source": "invoice.txt",
+            "kind": "text",
+            "chunk_index": 0,
+            "strategy": "recursive",
+        },
+    )
+    client = FakeStreamClient(split(payload()))
+    service, _ = make_service(client, results=[result])
+
+    events = await collect(
+        service,
+        "What is the payment status of invoice NS-2026-999?",
+    )
+
+    assert len(events) == 1
+    assert events[0].type == "final"
+    assert events[0].response is not None
+    assert events[0].response.abstained
+    assert events[0].response.citations == []
+    assert client.calls == 0

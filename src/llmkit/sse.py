@@ -44,7 +44,10 @@ def rag_event_to_sse(event: RAGStreamEvent) -> str:
     if event.type == "token":
         return format_sse("token", {"text": event.text})
     if event.type == "final" and event.response is not None:
-        return format_sse("final", asdict(event.response))
+        payload = asdict(event.response)
+        payload.pop("context", None)
+        payload.pop("retrieved", None)
+        return format_sse("final", payload)
     if event.type == "error":
         return format_sse("error", {"message": event.error or "unknown error"})
     return format_sse("error", {"message": "malformed stream event"})

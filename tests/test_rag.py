@@ -315,3 +315,58 @@ async def test_uncited_retrieved_sources_are_not_returned():
 
     assert len(result.citations) == 1
     assert result.citations[0].document == "pricing.pdf"
+
+
+async def test_missing_invoice_identifier_abstains_without_calling_llm():
+    result = make_result("Invoice No: NS-2026-204\nPayment Status: UNPAID")
+    service, _, client = make_service(response_json(), results=[result])
+
+    response = await service.ask("What is the payment status of invoice NS-2026-999?")
+
+    assert response.abstained
+    assert response.answer == REFUSAL_MESSAGE
+    assert response.citations == []
+    assert client.calls == []
+
+
+async def test_exact_invoice_identifier_allows_generation():
+    result = make_result("Invoice No: NS-2026-204\nPayment Status: UNPAID")
+    service, _, client = make_service(
+        response_json("The invoice is unpaid [S1]."),
+        results=[result],
+    )
+
+    response = await service.ask("What is the payment status of invoice NS-2026-204?")
+
+    assert not response.abstained
+    assert len(client.calls) == 1
+
+
+async def test_question_without_record_identifier_keeps_existing_behavior():
+    service, _, client = make_service(response_json())
+
+    response = await service.ask("How much does the service cost?")
+
+    assert not response.abstained
+    assert len(client.calls) == 1
+
+
+async def test_hyphenated_phrase_is_not_treated_as_record_identifier():
+    service, _, client = make_service(response_json())
+
+    response = await service.ask("What is the follow-up process?")
+
+    assert not response.abstained
+    assert len(client.calls) == 1
+
+
+async def test_partial_invoice_identifier_does_not_match_longer_identifier():
+    result = make_result("Invoice No: NS-2026-204\nPayment Status: UNPAID")
+    service, _, client = make_service(response_json(), results=[result])
+
+    response = await service.ask("What is the payment status of invoice NS-2026-20?")
+
+    assert response.abstained
+    assert response.answer == REFUSAL_MESSAGE
+    assert response.citations == []
+    assert client.calls == []
